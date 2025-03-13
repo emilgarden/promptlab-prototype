@@ -10,6 +10,20 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 
+def get_model_emoji(best_for: str) -> str:
+    """Returnerer passende emoji basert på modellens beste bruksområde."""
+    emoji_map = {
+        "Kreativ skriving": "✍️",
+        "Koding": "👨‍💻",
+        "Analyse": "📊",
+        "Generell": "🤖",
+        "Chat": "💬",
+        "Matematikk": "🔢",
+        "Oversettelse": "🌍",
+        "Sammendrag": "📝"
+    }
+    return emoji_map.get(best_for, "🤖")
+
 @dataclass
 class ModelInfo:
     name: str
@@ -30,6 +44,7 @@ class Message:
     content: str
     tokens: Optional[int] = None
     cost: Optional[float] = None  # Kostnad i USD
+    model_name: Optional[str] = None  # Navn på modellen som genererte svaret
 
 # Funksjon for å estimere antall tokens basert på tekst
 def estimate_tokens(text):
@@ -195,9 +210,15 @@ MODELS = [
     )
 ]
 
-# Initialiser session state for chat-historikk
+# Initialiser session state for chat-historikk og sammenligning
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+if "comparison_mode" not in st.session_state:
+    st.session_state.comparison_mode = False
+
+if "comparison_results" not in st.session_state:
+    st.session_state.comparison_results = []
 
 if "system_prompt" not in st.session_state:
     st.session_state.system_prompt = "Du er en hjelpsom assistent."
@@ -211,6 +232,13 @@ if "total_cost" not in st.session_state:
 if "current_model" not in st.session_state:
     st.session_state.current_model = MODELS[0].name
 
+if "comparison_model" not in st.session_state:
+    st.session_state.comparison_model = None
+
+# Legg til API-kallteller
+if "api_calls" not in st.session_state:
+    st.session_state.api_calls = {}
+
 # Last inn miljøvariabler
 load_dotenv()
 
@@ -221,93 +249,103 @@ anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 # Hent valutakurs
 usd_to_nok_rate = get_exchange_rate("USD", "NOK")
 
-# Sett opp sideoppsett med tre kolonner: venstre (modellvalg), midten (prompt/output), høyre (prisestimering)
+# Sett opp sideoppsett
 st.set_page_config(layout="wide", page_title="LLM Eksperimentering")
 
-# Opprett tre kolonner for hovedlayouten
-left_col, main_col, right_col = st.columns([1, 2, 1])
+# Opprett to hovedkolonner
+left_col, main_col, right_col = st.columns([1, 3, 1])
 
 with left_col:
     st.title("🤖 Modeller")
     
-    # Vis modeller gruppert etter leverandør
-    providers = list(set(model.provider for model in MODELS))
-    selected_provider = st.selectbox("Velg Leverandør", providers)
+    # Sammenligningsmodus toggle
+    st.session_state.comparison_mode = st.toggle("Sammenligningsmodus", value=st.session_state.comparison_mode)
     
-    # Filtrer modeller basert på valgt leverandør
-    available_models = [model for model in MODELS if model.provider == selected_provider]
-    selected_model_name = st.selectbox(
-        "Velg Modell",
-        [model.name for model in available_models]
-    )
+    if st.session_state.comparison_mode:
+        st.markdown("---")
+        # Modell 1 valg
+        st.subheader("Modell 1")
+        selected_model_name = st.selectbox(
+            "Velg første modell",
+            [f"{get_model_emoji(model.best_for)} {model.name}" for model in MODELS],
+            key="model1"
+        ).split(" ", 1)[1]
+        
+        st.markdown("---")
+        # Modell 2 valg
+        st.subheader("Modell 2")
+        comparison_model_name = st.selectbox(
+            "Velg andre modell",
+            [f"{get_model_emoji(model.best_for)} {model.name}" for model in MODELS if model.name != selected_model_name],
+            key="model2"
+        ).split(" ", 1)[1]
+        st.session_state.comparison_model = comparison_model_name
+    else:
+        st.markdown("---")
+        providers = list(set(model.provider for model in MODELS))
+        selected_provider = st.selectbox("Velg Leverandør", providers)
+        available_models = [model for model in MODELS if model.provider == selected_provider]
+        selected_model_name = st.selectbox(
+            "Velg Modell",
+            [f"{get_model_emoji(model.best_for)} {model.name}" for model in available_models]
+        ).split(" ", 1)[1]
+        st.session_state.comparison_model = None
     
     # Finn valgt modell
     selected_model = next(model for model in MODELS if model.name == selected_model_name)
     
-    # Lagre valgt modell i session state
     if st.session_state.current_model != selected_model.name:
         st.session_state.current_model = selected_model.name
     
     # Valutavalg
     currency = st.radio("Valuta", ["USD", "NOK"], horizontal=True)
     
-    # Vis modellinfo
-    st.markdown("---")
-    st.subheader("Modellinformasjon")
-    st.markdown(f"**Beskrivelse:** {selected_model.description}")
-    st.markdown(f"**Best for:** {selected_model.best_for}")
-    st.markdown("**Priser:**")
-    
-    # Vis priser i valgt valuta
-    if currency == "USD":
-        st.markdown(f"- Input: ${selected_model.input_price:.3f} per million tokens")
-        if selected_model.cached_input_price:
-            st.markdown(f"- Cached Input: ${selected_model.cached_input_price:.3f} per million tokens")
-        st.markdown(f"- Output: ${selected_model.output_price:.3f} per million tokens")
-    else:  # NOK
-        st.markdown(f"- Input: {selected_model.input_price * usd_to_nok_rate:.2f} NOK per million tokens")
-        if selected_model.cached_input_price:
-            st.markdown(f"- Cached Input: {selected_model.cached_input_price * usd_to_nok_rate:.2f} NOK per million tokens")
-        st.markdown(f"- Output: {selected_model.output_price * usd_to_nok_rate:.2f} NOK per million tokens")
-    
-    if selected_model.context_window:
-        st.markdown(f"**Kontekstvindu:** {selected_model.context_window:,} tokens")
-    if selected_model.max_output_tokens:
-        st.markdown(f"**Maks output:** {selected_model.max_output_tokens:,} tokens")
-    if selected_model.training_cutoff:
-        st.markdown(f"**Treningsdata cutoff:** {selected_model.training_cutoff}")
-    if selected_model.api_name:
-        st.markdown(f"**API-navn:** {selected_model.api_name}")
-    
-    # Vis valutakurs hvis NOK er valgt
-    if currency == "NOK":
-        st.markdown(f"**Valutakurs:** 1 USD = {usd_to_nok_rate:.2f} NOK")
-        if "exchange_rate_cache" in st.session_state and "USD_NOK" in st.session_state.exchange_rate_cache:
-            last_updated = st.session_state.exchange_rate_cache["USD_NOK"]["timestamp"]
-            st.markdown(f"**Sist oppdatert:** {last_updated.strftime('%Y-%m-%d %H:%M')}")
-            days_until_refresh = 4 - (datetime.now() - last_updated).days
-            st.markdown(f"**Oppdateres om:** {days_until_refresh} dager")
-    
-    # Vis API status
-    st.markdown("---")
-    st.subheader("API Status")
-    
-    # OpenAI status
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if openai_key and openai_key != "your-openai-key-here":
-        st.success("OpenAI API Nøkkel er konfigurert")
-    else:
-        st.error("OpenAI API Nøkkel mangler")
-    
-    # Anthropic status
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-    if anthropic_key and anthropic_key != "your-anthropic-key-here":
-        st.success("Anthropic API Nøkkel er konfigurert")
-    else:
-        st.error("Anthropic API Nøkkel mangler")
+    # Kompakt modellinfo
+    with st.expander(f"{get_model_emoji(selected_model.best_for)} Modellinformasjon"):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.caption("**Egenskaper**")
+            st.markdown(f"🎯 **Best for:** {selected_model.best_for}")
+            st.markdown(f"📝 **Beskrivelse:** {selected_model.description}")
+            if selected_model.context_window:
+                st.markdown(f"📊 **Kontekst:** {selected_model.context_window:,} tokens")
+            if selected_model.max_output_tokens:
+                st.markdown(f"📤 **Maks output:** {selected_model.max_output_tokens:,}")
+        
+        with col2:
+            st.caption("**Priser (per million tokens)**")
+            if currency == "USD":
+                st.markdown(f"📥 Input: ${selected_model.input_price:.3f}")
+                if selected_model.cached_input_price:
+                    st.markdown(f"💾 Cached: ${selected_model.cached_input_price:.3f}")
+                st.markdown(f"📤 Output: ${selected_model.output_price:.3f}")
+            else:
+                st.markdown(f"📥 Input: {selected_model.input_price * usd_to_nok_rate:.2f} NOK")
+                if selected_model.cached_input_price:
+                    st.markdown(f"💾 Cached: {selected_model.cached_input_price * usd_to_nok_rate:.2f} NOK")
+                st.markdown(f"📤 Output: {selected_model.output_price * usd_to_nok_rate:.2f} NOK")
+
+    # API status i en ekspander
+    with st.expander("🔑 API Status"):
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if openai_key and openai_key != "your-openai-key-here":
+            st.success("✅ OpenAI API Nøkkel er konfigurert")
+        else:
+            st.error("❌ OpenAI API Nøkkel mangler")
+        
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+        if anthropic_key and anthropic_key != "your-anthropic-key-here":
+            st.success("✅ Anthropic API Nøkkel er konfigurert")
+        else:
+            st.error("❌ Anthropic API Nøkkel mangler")
 
 with main_col:
+    # Fjern knappen for å vise/skjule prisestimering
+    # col1, col2, col3 = st.columns([6, 1, 1])
+    # with col1:
     st.title("🤖 LLM Eksperimentering")
+    # with col3:
+    #     st.button("💰", help="Vis/skjul prisestimering", key="price_toggle", on_click=toggle_price_estimation)
     
     # System prompt øverst
     system_prompt = st.text_area("System prompt:", 
@@ -315,55 +353,194 @@ with main_col:
                                 height=100)
     st.session_state.system_prompt = system_prompt
     
-    # Vis chat-historikk
-    st.subheader("Samtale")
-    chat_container = st.container(height=400, border=True)
-    
-    with chat_container:
-        for message in st.session_state.messages:
-            if message.role == "user":
-                st.markdown(f"**Du:**")
-                st.markdown(message.content)
+    # Samtalevisning før input-området
+    if st.session_state.comparison_mode:
+        st.info("Sammenligningsmodus er aktiv - svar genereres fra begge modellene")
+        # Juster kolonnebredden for å utnytte mer plass
+        chat_col1, spacer, chat_col2 = st.columns([10, 1, 10])
+        
+        # Venstre samtalekolonne (Modell 1)
+        with chat_col1:
+            # Beregn modellens gjennomsnittlige kostnad per 1000 tokens
+            avg_cost_per_1k = (selected_model.input_price + selected_model.output_price) / 2000
+            if currency == "USD":
+                price_info = f"Prisinfo for {selected_model_name}\n\n" \
+                            f"• Input: ${selected_model.input_price:.3f} per million tokens\n" \
+                            f"• Output: ${selected_model.output_price:.3f} per million tokens\n" \
+                            f"• Gjennomsnitt: ${avg_cost_per_1k:.5f} per 1000 tokens"
             else:
-                st.markdown(f"**Assistent:**")
-                st.markdown(message.content)
+                price_info = f"Prisinfo for {selected_model_name}\n\n" \
+                            f"• Input: {selected_model.input_price * usd_to_nok_rate:.2f} NOK per million tokens\n" \
+                            f"• Output: {selected_model.output_price * usd_to_nok_rate:.2f} NOK per million tokens\n" \
+                            f"• Gjennomsnitt: {avg_cost_per_1k * usd_to_nok_rate:.5f} NOK per 1000 tokens"
             
-            # Vis token-info og kostnad hvis tilgjengelig
-            if message.tokens:
-                token_info = f"*{message.tokens:,} tokens*"
-                if message.cost:
-                    if currency == "USD":
-                        token_info += f" *- Kostnad: ${message.cost:.6f}*"
-                    else:
-                        token_info += f" *- Kostnad: {message.cost * usd_to_nok_rate:.6f} NOK*"
-                st.caption(token_info)
+            # Vis overskrift med prisinfo-ikon
+            st.subheader(f"{get_model_emoji(selected_model.best_for)} {selected_model_name}")
+            st.caption(f"💰 Hover for prisinfo", help=price_info)
             
-            st.markdown("---")
+            # Vis API-kallteller for denne modellen
+            if selected_model_name in st.session_state.api_calls:
+                st.caption(f"🔄 {st.session_state.api_calls[selected_model_name]} API-kall")
+            
+            chat_container1 = st.container(height=400, border=True)
+            with chat_container1:
+                # Filtrer meldinger for denne modellen
+                model_messages = []
+                for i, message in enumerate(st.session_state.messages):
+                    if message.role == "user":
+                        model_messages.append(message)
+                    elif message.model_name == selected_model_name:
+                        model_messages.append(message)
+                
+                # Vis meldinger
+                for message in model_messages:
+                    if message.role == "user":
+                        st.markdown(f"**Du:**")
+                        st.markdown(message.content)
+                    elif message.model_name == selected_model_name:
+                        st.markdown(f"**Assistent ({selected_model_name}):**")
+                        st.markdown(message.content)
+                        if message.tokens:
+                            token_info = f"*{message.tokens:,} tokens*"
+                            if message.cost:
+                                if currency == "USD":
+                                    token_info += f" *- ${message.cost:.6f}*"
+                                else:
+                                    token_info += f" *- {message.cost * usd_to_nok_rate:.6f} NOK*"
+                            st.caption(token_info)
+                    st.markdown("---")
+        
+        # Høyre samtalekolonne (Modell 2)
+        with chat_col2:
+            comparison_model = next(model for model in MODELS if model.name == comparison_model_name)
+            
+            # Beregn modellens gjennomsnittlige kostnad per 1000 tokens
+            avg_cost_per_1k = (comparison_model.input_price + comparison_model.output_price) / 2000
+            if currency == "USD":
+                price_info = f"Prisinfo for {comparison_model_name}\n\n" \
+                            f"• Input: ${comparison_model.input_price:.3f} per million tokens\n" \
+                            f"• Output: ${comparison_model.output_price:.3f} per million tokens\n" \
+                            f"• Gjennomsnitt: ${avg_cost_per_1k:.5f} per 1000 tokens"
+            else:
+                price_info = f"Prisinfo for {comparison_model_name}\n\n" \
+                            f"• Input: {comparison_model.input_price * usd_to_nok_rate:.2f} NOK per million tokens\n" \
+                            f"• Output: {comparison_model.output_price * usd_to_nok_rate:.2f} NOK per million tokens\n" \
+                            f"• Gjennomsnitt: {avg_cost_per_1k * usd_to_nok_rate:.5f} NOK per 1000 tokens"
+            
+            # Vis overskrift med prisinfo-ikon
+            st.subheader(f"{get_model_emoji(comparison_model.best_for)} {comparison_model_name}")
+            st.caption(f"💰 Hover for prisinfo", help=price_info)
+            
+            # Vis API-kallteller for denne modellen
+            if comparison_model_name in st.session_state.api_calls:
+                st.caption(f"🔄 {st.session_state.api_calls[comparison_model_name]} API-kall")
+            
+            chat_container2 = st.container(height=400, border=True)
+            with chat_container2:
+                # Filtrer meldinger for denne modellen
+                model_messages = []
+                for i, message in enumerate(st.session_state.messages):
+                    if message.role == "user":
+                        model_messages.append(message)
+                    elif message.model_name == comparison_model_name:
+                        model_messages.append(message)
+                
+                # Vis meldinger
+                for message in model_messages:
+                    if message.role == "user":
+                        st.markdown(f"**Du:**")
+                        st.markdown(message.content)
+                    elif message.model_name == comparison_model_name:
+                        st.markdown(f"**Assistent ({comparison_model_name}):**")
+                        st.markdown(message.content)
+                        if message.tokens:
+                            token_info = f"*{message.tokens:,} tokens*"
+                            if message.cost:
+                                if currency == "USD":
+                                    token_info += f" *- ${message.cost:.6f}*"
+                                else:
+                                    token_info += f" *- {message.cost * usd_to_nok_rate:.6f} NOK*"
+                            st.caption(token_info)
+                    st.markdown("---")
+    else:
+        # Standard samtalevisning
+        # Beregn modellens gjennomsnittlige kostnad per 1000 tokens
+        avg_cost_per_1k = (selected_model.input_price + selected_model.output_price) / 2000
+        if currency == "USD":
+            price_info = f"Prisinfo for {selected_model_name}\n\n" \
+                        f"• Input: ${selected_model.input_price:.3f} per million tokens\n" \
+                        f"• Output: ${selected_model.output_price:.3f} per million tokens\n" \
+                        f"• Gjennomsnitt: ${avg_cost_per_1k:.5f} per 1000 tokens"
+        else:
+            price_info = f"Prisinfo for {selected_model_name}\n\n" \
+                        f"• Input: {selected_model.input_price * usd_to_nok_rate:.2f} NOK per million tokens\n" \
+                        f"• Output: {selected_model.output_price * usd_to_nok_rate:.2f} NOK per million tokens\n" \
+                        f"• Gjennomsnitt: {avg_cost_per_1k * usd_to_nok_rate:.5f} NOK per 1000 tokens"
+        
+        # Vis overskrift med prisinfo-ikon
+        st.subheader(f"{get_model_emoji(selected_model.best_for)} Samtale")
+        st.caption(f"💰 Hover for prisinfo", help=price_info)
+        
+        # Vis API-kallteller for denne modellen
+        if selected_model_name in st.session_state.api_calls:
+            st.caption(f"🔄 {st.session_state.api_calls[selected_model_name]} API-kall")
+        
+        chat_container = st.container(height=400, border=True)
+        with chat_container:
+            for message in st.session_state.messages:
+                if message.role == "user":
+                    st.markdown(f"**Du:**")
+                    st.markdown(message.content)
+                elif message.model_name == selected_model_name or message.model_name is None:
+                    st.markdown(f"**Assistent ({message.model_name or selected_model_name}):**")
+                    st.markdown(message.content)
+                    if message.tokens:
+                        token_info = f"*{message.tokens:,} tokens*"
+                        if message.cost:
+                            if currency == "USD":
+                                token_info += f" *- ${message.cost:.6f}*"
+                            else:
+                                token_info += f" *- {message.cost * usd_to_nok_rate:.6f} NOK*"
+                        st.caption(token_info)
+                st.markdown("---")
     
-    # Cached input valg
-    use_cached_input = st.checkbox("Bruk cached input", value=False, disabled=selected_model.cached_input_price is None)
+    st.markdown("---")
     
-    # Input-felt for ny melding
+    # Input-område nederst
+    use_cached_input = st.checkbox("💾 Bruk cached input", value=False, disabled=selected_model.cached_input_price is None)
     user_prompt = st.text_area("Skriv inn din melding:", height=100)
     
-    # Send-knapp
+    # Knapper
     send_col, clear_col = st.columns([3, 1])
     with send_col:
-        send_button = st.button("Send", type="primary", use_container_width=True)
+        send_button = st.button("📤 Send", type="primary", use_container_width=True)
     with clear_col:
-        if st.button("Tøm samtale", use_container_width=True):
+        if st.button("🗑️ Tøm samtale", use_container_width=True):
             st.session_state.messages = []
             st.session_state.total_tokens_used = {"input": 0, "output": 0}
             st.session_state.total_cost = {"input": 0.0, "output": 0.0}
             st.rerun()
 
+# Flytt prisestimering til høyre kolonne
 with right_col:
     st.title("💰 Prisestimering")
     
-    # Dynamisk estimering av tokens basert på tekstlengde
+    # Vis API-kallteller
+    with st.expander("🔄 API-kall statistikk"):
+        if st.session_state.api_calls:
+            st.subheader("Antall API-kall per modell")
+            for model_name, count in st.session_state.api_calls.items():
+                st.metric(f"{model_name}", f"{count} kall")
+            
+            if st.button("Nullstill API-kallteller"):
+                st.session_state.api_calls = {}
+                st.rerun()
+        else:
+            st.info("Ingen API-kall er gjort ennå.")
+    
+    # Dynamisk estimering av tokens
     estimated_input_tokens = estimate_tokens(system_prompt) + estimate_tokens(user_prompt)
     if st.session_state.messages:
-        # Legg til estimert token-bruk fra tidligere meldinger
         for msg in st.session_state.messages:
             if msg.tokens and msg.role == "user":
                 estimated_input_tokens += msg.tokens
@@ -419,34 +596,29 @@ with right_col:
         total_estimated_cost_nok = total_estimated_cost_usd * usd_to_nok_rate
         st.metric("Total estimert kostnad", f"{total_estimated_cost_nok:.6f} NOK")
     
-    # Vis pris per token for referanse
-    st.markdown("**Pris per token:**")
-    if currency == "USD":
-        st.markdown(f"- Input: ${input_price/1_000_000:.8f}")
-        st.markdown(f"- Output: ${selected_model.output_price/1_000_000:.8f}")
-    else:
-        st.markdown(f"- Input: {(input_price/1_000_000) * usd_to_nok_rate:.8f} NOK")
-        st.markdown(f"- Output: {(selected_model.output_price/1_000_000) * usd_to_nok_rate:.8f} NOK")
-    
-    # Vis total token-bruk og kostnad
-    st.markdown("---")
-    st.subheader("📊 Total token-bruk og kostnad")
-    total_input_tokens = st.session_state.total_tokens_used["input"]
-    total_output_tokens = st.session_state.total_tokens_used["output"]
-    
-    # Beregn total kostnad
-    total_input_cost_usd = st.session_state.total_cost["input"]
-    total_output_cost_usd = st.session_state.total_cost["output"]
-    total_cost_usd = total_input_cost_usd + total_output_cost_usd
-    
-    # Vis i valgt valuta
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Total input tokens", f"{total_input_tokens:,}")
-        st.metric("Total output tokens", f"{total_output_tokens:,}")
-    
-    with col2:
+    # Vis pris per token for referanse i en ekspander
+    with st.expander("Pris per token"):
         if currency == "USD":
+            st.markdown(f"- Input: ${input_price/1_000_000:.8f}")
+            st.markdown(f"- Output: ${selected_model.output_price/1_000_000:.8f}")
+        else:
+            st.markdown(f"- Input: {(input_price/1_000_000) * usd_to_nok_rate:.8f} NOK")
+            st.markdown(f"- Output: {(selected_model.output_price/1_000_000) * usd_to_nok_rate:.8f} NOK")
+    
+    # Vis total token-bruk og kostnad i en ekspander
+    with st.expander("📊 Total token-bruk og kostnad"):
+        total_input_tokens = st.session_state.total_tokens_used["input"]
+        total_output_tokens = st.session_state.total_tokens_used["output"]
+        
+        # Beregn total kostnad
+        total_input_cost_usd = st.session_state.total_cost["input"]
+        total_output_cost_usd = st.session_state.total_cost["output"]
+        total_cost_usd = total_input_cost_usd + total_output_cost_usd
+        
+        # Vis i valgt valuta
+        if currency == "USD":
+            st.metric("Total input tokens", f"{total_input_tokens:,}")
+            st.metric("Total output tokens", f"{total_output_tokens:,}")
             st.metric("Total input kostnad", f"${total_input_cost_usd:.6f}")
             st.metric("Total output kostnad", f"${total_output_cost_usd:.6f}")
             st.metric("Total kostnad", f"${total_cost_usd:.6f}")
@@ -454,6 +626,8 @@ with right_col:
             total_input_cost_nok = total_input_cost_usd * usd_to_nok_rate
             total_output_cost_nok = total_output_cost_usd * usd_to_nok_rate
             total_cost_nok = total_cost_usd * usd_to_nok_rate
+            st.metric("Total input tokens", f"{total_input_tokens:,}")
+            st.metric("Total output tokens", f"{total_output_tokens:,}")
             st.metric("Total input kostnad", f"{total_input_cost_nok:.6f} NOK")
             st.metric("Total output kostnad", f"{total_output_cost_nok:.6f} NOK")
             st.metric("Total kostnad", f"{total_cost_nok:.6f} NOK")
@@ -467,76 +641,96 @@ if send_button and user_prompt:
     
     try:
         with st.spinner("Genererer svar..."):
-            # Bygg meldingshistorikk for API-kall
-            if selected_model.provider == "OpenAI":
-                # OpenAI API kall
-                messages = [{"role": "system", "content": system_prompt}]
-                
-                # Legg til tidligere meldinger
-                for msg in st.session_state.messages:
-                    if msg.role == "user":
-                        messages.append({"role": "user", "content": msg.content})
-                    else:
-                        messages.append({"role": "assistant", "content": msg.content})
-                
-                response = openai_client.chat.completions.create(
-                    model=selected_model.api_name,
-                    messages=messages
-                )
-                response_text = response.choices[0].message.content
-                
-                # Hent faktisk token bruk
-                prompt_tokens = response.usage.prompt_tokens
-                completion_tokens = response.usage.completion_tokens
-                
+            models_to_use = []
+            if st.session_state.comparison_mode:
+                models_to_use = [
+                    next(model for model in MODELS if model.name == selected_model_name),
+                    next(model for model in MODELS if model.name == st.session_state.comparison_model)
+                ]
+                st.info(f"Sender forespørsel til både {selected_model_name} og {st.session_state.comparison_model}...")
             else:
-                # Anthropic API kall
-                messages = []
+                models_to_use = [next(model for model in MODELS if model.name == selected_model_name)]
+                st.info(f"Sender forespørsel til {selected_model_name}...")
+            
+            for model in models_to_use:
+                # Oppdater API-kallteller
+                if model.name in st.session_state.api_calls:
+                    st.session_state.api_calls[model.name] += 1
+                else:
+                    st.session_state.api_calls[model.name] = 1
                 
-                # Legg til tidligere meldinger
-                for msg in st.session_state.messages:
-                    if msg.role == "user":
-                        messages.append({"role": "user", "content": msg.content})
-                    else:
-                        messages.append({"role": "assistant", "content": msg.content})
+                # Bygg meldingshistorikk for API-kall
+                if model.provider == "OpenAI":
+                    # OpenAI API kall
+                    messages = [{"role": "system", "content": system_prompt}]
+                    
+                    # Legg til tidligere meldinger
+                    for msg in st.session_state.messages:
+                        if msg.role == "user":
+                            messages.append({"role": "user", "content": msg.content})
+                        elif not st.session_state.comparison_mode or msg.model_name == model.name:
+                            messages.append({"role": "assistant", "content": msg.content})
+                    
+                    response = openai_client.chat.completions.create(
+                        model=model.api_name,
+                        messages=messages
+                    )
+                    response_text = response.choices[0].message.content
+                    
+                    # Hent faktisk token bruk
+                    prompt_tokens = response.usage.prompt_tokens
+                    completion_tokens = response.usage.completion_tokens
+                    
+                else:
+                    # Anthropic API kall
+                    messages = []
+                    
+                    # Legg til tidligere meldinger
+                    for msg in st.session_state.messages:
+                        if msg.role == "user":
+                            messages.append({"role": "user", "content": msg.content})
+                        elif not st.session_state.comparison_mode or msg.model_name == model.name:
+                            messages.append({"role": "assistant", "content": msg.content})
+                    
+                    response = anthropic_client.messages.create(
+                        model=model.api_name,
+                        max_tokens=1024,
+                        messages=messages,
+                        system=system_prompt
+                    )
+                    response_text = response.content[0].text
+                    
+                    # Hent faktisk token bruk (Anthropic)
+                    prompt_tokens = response.usage.input_tokens
+                    completion_tokens = response.usage.output_tokens
                 
-                response = anthropic_client.messages.create(
-                    model=selected_model.api_name,
-                    max_tokens=1024,
-                    messages=messages,
-                    system=system_prompt
+                # Beregn faktiske kostnader
+                model_input_price = model.cached_input_price if use_cached_input and model.cached_input_price else model.input_price
+                input_cost = calculate_cost(prompt_tokens, model_input_price)
+                output_cost = calculate_cost(completion_tokens, model.output_price)
+                
+                # Oppdater brukerens melding med faktisk token-bruk og kostnad
+                if len(st.session_state.messages) > 0 and not st.session_state.comparison_mode:
+                    last_user_message = st.session_state.messages[-1]
+                    if last_user_message.role == "user":
+                        last_user_message.tokens = user_tokens
+                        last_user_message.cost = calculate_cost(user_tokens, model_input_price)
+                
+                # Legg til assistentens svar i historikken med kostnad
+                assistant_message = Message(
+                    role="assistant", 
+                    content=response_text, 
+                    tokens=completion_tokens,
+                    cost=output_cost,
+                    model_name=model.name
                 )
-                response_text = response.content[0].text
+                st.session_state.messages.append(assistant_message)
                 
-                # Hent faktisk token bruk (Anthropic)
-                prompt_tokens = response.usage.input_tokens
-                completion_tokens = response.usage.output_tokens
-            
-            # Beregn faktiske kostnader
-            input_cost = calculate_cost(prompt_tokens, input_price)
-            output_cost = calculate_cost(completion_tokens, selected_model.output_price)
-            
-            # Oppdater brukerens melding med faktisk token-bruk og kostnad
-            if len(st.session_state.messages) > 0:
-                last_user_message = st.session_state.messages[-1]
-                if last_user_message.role == "user":
-                    last_user_message.tokens = user_tokens
-                    last_user_message.cost = calculate_cost(user_tokens, input_price)
-            
-            # Legg til assistentens svar i historikken med kostnad
-            assistant_message = Message(
-                role="assistant", 
-                content=response_text, 
-                tokens=completion_tokens,
-                cost=output_cost
-            )
-            st.session_state.messages.append(assistant_message)
-            
-            # Oppdater total token-bruk og kostnad
-            st.session_state.total_tokens_used["input"] += prompt_tokens
-            st.session_state.total_tokens_used["output"] += completion_tokens
-            st.session_state.total_cost["input"] += input_cost
-            st.session_state.total_cost["output"] += output_cost
+                # Oppdater total token-bruk og kostnad
+                st.session_state.total_tokens_used["input"] += prompt_tokens
+                st.session_state.total_tokens_used["output"] += completion_tokens
+                st.session_state.total_cost["input"] += input_cost
+                st.session_state.total_cost["output"] += output_cost
             
             # Oppdater siden for å vise den nye meldingen
             st.rerun()

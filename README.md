@@ -1,95 +1,67 @@
-# PromptLab - LLM Eksperimenteringsverktøy
+# LLM Eksperimentering
 
-PromptLab er et verktøy for å eksperimentere med ulike språkmodeller (LLMs), estimere kostnader og sammenligne resultater. Applikasjonen er bygget med Streamlit og støtter modeller fra OpenAI og Anthropic.
-
-![PromptLab Screenshot](screenshot.png)
+Dette er et verktøy for å eksperimentere med og sammenligne forskjellige språkmodeller (LLMs) via deres API-er.
 
 ## Funksjoner
 
-- **Chat-grensesnitt**: Moderne chat-grensesnitt for interaksjon med språkmodeller
-- **Støtte for flere modeller**: Integrasjon med både OpenAI og Anthropic modeller
-- **Kostnadsestimering**: Nøyaktig estimering av token-bruk og kostnader før og etter generering
-- **Valutakonvertering**: Veksling mellom USD og NOK med automatisk oppdatering av valutakurser
-- **Cached input**: Støtte for cached input for modeller som tilbyr dette
-- **Systemprompter**: Mulighet for å definere systemprompter for å styre modellens oppførsel
-- **Samtalehistorikk**: Lagring av samtalehistorikk med token-telling og kostnadsberegning
+- **Modellstøtte**:
+  - OpenAI: GPT-3.5 Turbo, GPT-4o, GPT-4o mini
+  - Anthropic: Claude 3.7 Sonnet, Claude 3.5 Sonnet, Claude 3.5 Haiku, Claude 3 Opus, Claude 3 Haiku
+- **Sammenligningsmodus**: Sammenlign to modeller side ved side med samme prompt
+- **Prisestimering**: Detaljert estimering av token-bruk og kostnader
+- **API-statistikk**: Sporing av antall API-kall per modell
+- **Visuelt forbedret grensesnitt**:
+  - Emojier for modelltyper
+  - Kompakt modellinformasjon
+  - Delt samtalevisning i sammenligningsmodus
+  - Hover-funksjonalitet for prisinfo
+- **System prompt**: Definer systemprompter for å styre modellens oppførsel
 
 ## Installasjon
 
-1. Klone repositoriet:
-```bash
-git clone https://github.com/yourusername/promptlab-prototype.git
-cd promptlab-prototype
-```
-
-2. Installer avhengigheter:
+1. Installer avhengigheter:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Opprett en `.env` fil med API-nøkler:
-```
-OPENAI_API_KEY=your-openai-key-here
-ANTHROPIC_API_KEY=your-anthropic-key-here
+2. Kopier `.env.example` til `.env`:
+```bash
+cp .env.example .env
 ```
 
-4. Start applikasjonen:
+3. Legg til dine API-nøkler i `.env` filen:
+- Få en OpenAI API-nøkkel fra: https://platform.openai.com/api-keys
+- Få en Anthropic API-nøkkel fra: https://console.anthropic.com/
+
+## Kjør applikasjonen
+
 ```bash
 streamlit run app.py
 ```
 
 ## Bruk
 
-1. Velg leverandør og modell i venstre panel
-2. Angi systemprompten (valgfritt)
-3. Skriv inn din melding i tekstfeltet
-4. Se kostnadsestimater i høyre panel
-5. Klikk "Send" for å generere svar
-6. Se faktisk token-bruk og kostnader etter generering
+### Standard modus
+1. Velg leverandør (OpenAI eller Anthropic)
+2. Velg ønsket språkmodell fra nedtrekkslisten
+3. Skriv inn din prompt i tekstfeltet
+4. (Valgfritt) Tilpass system prompt
+5. Klikk på "Send" for å generere svar
 
-## Modeller
+### Sammenligningsmodus
+1. Aktiver "Sammenligningsmodus" med toggle-knappen
+2. Velg to forskjellige modeller (kan være fra forskjellige leverandører)
+3. Skriv inn din prompt
+4. Klikk på "Send" for å generere svar fra begge modellene samtidig
+5. Sammenlign svarene side ved side
 
-Applikasjonen støtter følgende modeller:
+### Prisestimering
+- Se estimert token-bruk og kostnad i høyre sidepanel
+- Hover over "💰" ikonet under modellnavnet for detaljert prisinformasjon
+- Se API-kallstatistikk i ekspanderbaren i høyre sidepanel
 
-### OpenAI
-- GPT-3.5 Turbo
-- GPT-3.5 Turbo 16K
-- GPT-4o
-- GPT-4o mini
+## Sikkerhet
 
-### Anthropic
-- Claude 3.7 Sonnet
-- Claude 3.5 Sonnet (nyeste)
-- Claude 3.5 Sonnet (tidligere)
-- Claude 3.5 Haiku
-- Claude 3 Opus
-- Claude 3 Haiku
-
-## Kostnadsberegning
-
-Applikasjonen beregner kostnader basert på:
-- Antall input tokens × pris per million tokens
-- Antall output tokens × pris per million tokens
-
-Prisene er oppdatert per november 2024 og kan endres over tid.
-
-## Valutakonvertering
-
-Valutakurser hentes fra Frankfurter API og caches i 4 dager for å redusere API-kall.
-
-## Krav
-
-- Python 3.8+
-- Streamlit
-- OpenAI Python SDK
-- Anthropic Python SDK
-- python-dotenv
-- requests
-
-## Bidrag
-
-Bidrag til prosjektet er velkomne! Vennligst åpne en issue eller pull request for forslag til forbedringer.
-
-## Lisens
-
-Dette prosjektet er lisensiert under MIT-lisensen - se [LICENSE](LICENSE) filen for detaljer. 
+- Ikke del dine API-nøkler med andre
+- `.env` filen er lagt til i `.gitignore` for å unngå at nøkler blir delt
+- Hold dependencies oppdatert for beste sikkerhet 
